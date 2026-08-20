@@ -21,7 +21,11 @@ BACKUP_FILE="$BACKUP_DIR/shop_$DATE.sql"
 echo "Starting PostgreSQL backup..."
 
 kubectl exec -n "$NAMESPACE" "$POD" -- \
-  pg_dump -U "$USER" "$DATABASE" > "$BACKUP_FILE"
+  pg_dump \
+  -U "$USER" \
+  --clean \
+  --if-exists \
+  "$DATABASE" > "$BACKUP_FILE"
 
 echo "Backup created: $BACKUP_FILE"
 

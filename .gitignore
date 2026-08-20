@@ -1,0 +1,5 @@
+# PostgreSQL backup files
+backup/*.sql
+
+# PostgreSQL backup logs
+logs/*.log
