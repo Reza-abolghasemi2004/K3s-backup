@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Cronjob
+
+metadata:
+  name: postgres-backup
+  namespace: postgres
+
+spec:
+  schedule: "* * * * *"
+
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: onFailure
+          containars:
+            - name: postgres-backup
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+
+              args:
+                - |
+                  echo "starting backup ..."
+
+                  kubectl exec -n postgres postgres-0 -- \
+                    pg_dump -U postgres shop > /tmp/shop.sql
+                  echo "backup completed"
