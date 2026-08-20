@@ -29,7 +29,7 @@ A hands-on Kubernetes (K3s) scenario deploying a **PostgreSQL** database for a s
 |---|---|
 | Platform | K3s (lightweight Kubernetes) |
 | Database | PostgreSQL (StatefulSet) |
-| Storage | PersistentVolumeClaim (PVC) |
+| Storage | Two PVCs — one for PostgreSQL data, one for backup archives |
 | Secrets | Kubernetes `Secret` for DB credentials |
 | Backup format | `pg_dump` → `.sql` → compressed `.tar.gz` |
 | Retention | Backups older than **2 days** are automatically pruned |
@@ -40,23 +40,22 @@ A hands-on Kubernetes (K3s) scenario deploying a **PostgreSQL** database for a s
 ## 🏗️ Architecture
 
 ```
-                ┌─────────────────────────┐
-                │   Namespace: (see        │
-                │   namespace.yaml)        │
-                │                          │
-   Secret ─────▶│  ┌────────────────────┐  │
- (DB creds)     │  │  StatefulSet       │  │
-                │  │  PostgreSQL Pod    │◀─┼── Service (ClusterIP)
-   PVC ────────▶│  │                    │  │
- (data volume)  │  └────────────────────┘  │
-                │            ▲             │
-                │            │ pg_dump     │
-                │   ┌────────┴─────────┐   │
-                │   │ CronJob           │  │
-                │   │ (every 15 min)    │  │
-                │   │ runs backup.sh    │  │
-                │   └───────────────────┘  │
-                └─────────────────────────┘
+                ┌─────────────────────────────┐
+                │   Namespace (postgres/namespace.yaml) │
+                │                              │
+   Secret ─────▶│  ┌────────────────────┐      │
+ (DB creds)     │  │  StatefulSet       │      │
+                │  │  PostgreSQL Pod    │◀─────┼── Service (ClusterIP)
+   PVC ────────▶│  │                    │      │
+ (data volume)  │  └────────────────────┘      │
+                │            ▲                 │
+                │            │ pg_dump          │
+                │   ┌────────┴─────────┐        │
+                │   │ CronJob            │       │
+   Backup PVC ─▶│   │ (every 15 min)     │       │
+ (archive       │   │ runs backup.sh     │       │
+  volume)       │   └───────────────────┘       │
+                └─────────────────────────────┘
                              │
                              ▼
                   backup/*.tar.gz + logs/
@@ -68,17 +67,20 @@ A hands-on Kubernetes (K3s) scenario deploying a **PostgreSQL** database for a s
 
 ```
 K3s-backup/
-├── namespace.yaml        # Namespace for the PostgreSQL workload
-├── secret.yaml            # DB credentials (user/password) as a K8s Secret
-├── pvc.yaml                # PersistentVolumeClaim for PostgreSQL data
-├── statefulset.yaml     # PostgreSQL StatefulSet deployment
-├── service.yaml           # ClusterIP Service exposing PostgreSQL
-├── cronjob.yaml           # CronJob scheduling automated backups
+├── postgres/
+│   ├── namespace.yaml       # Namespace for the PostgreSQL workload
+│   ├── secret.yaml            # DB credentials (user/password) as a K8s Secret
+│   ├── pvc.yaml                 # PersistentVolumeClaim for PostgreSQL data
+│   ├── statefulset.yaml      # PostgreSQL StatefulSet deployment
+│   └── service.yaml            # ClusterIP Service exposing PostgreSQL
+├── backup/
+│   ├── backup-pvc.yaml       # PersistentVolumeClaim for storing backup archives
+│   ├── cronjob.yaml            # CronJob scheduling automated backups
+│   └── shop_*.sql               # Generated backup dumps
 ├── scripts/
-│   ├── backup.sh            # Dumps DB → tar.gz, prunes backups > 2 days old
-│   └── restore.sh           # Restores DB from the latest (or chosen) backup
-├── backup/                  # Generated backup archives (*.sql / *.tar.gz)
-├── logs/                     # cron.log & backup.log output
+│   ├── backup.sh                # Dumps DB → tar.gz, prunes backups > 2 days old
+│   └── restore.sh              # Restores DB from the latest (or chosen) backup
+├── logs/                          # cron.log & backup.log output
 ├── LICENSE
 └── README.md
 ```
@@ -100,17 +102,20 @@ Apply the manifests in order — namespace and secrets first, then storage, then
 
 ```bash
 # 1. Create the namespace
-kubectl apply -f namespace.yaml
+kubectl apply -f postgres/namespace.yaml
 
 # 2. Create the Secret (DB password) and PVC (data volume)
-kubectl apply -f secret.yaml
-kubectl apply -f pvc.yaml
+kubectl apply -f postgres/secret.yaml
+kubectl apply -f postgres/pvc.yaml
 
 # 3. Deploy PostgreSQL as a StatefulSet
-kubectl apply -f statefulset.yaml
+kubectl apply -f postgres/statefulset.yaml
 
 # 4. Expose it internally via a Service
-kubectl apply -f service.yaml
+kubectl apply -f postgres/service.yaml
+
+# 5. Create the PVC that will store backup archives
+kubectl apply -f backup/backup-pvc.yaml
 ```
 
 Verify everything is healthy:
@@ -206,7 +211,7 @@ rm -rf "$TMP_DIR"
 
 ## ⏰ Scheduled Backups (CronJob)
 
-`cronjob.yaml` schedules `backup.sh` to run automatically **every 15 minutes** inside the cluster:
+`backup/cronjob.yaml` schedules `backup.sh` to run automatically **every 15 minutes** inside the cluster, mounting the `backup-pvc` volume so archives persist independently of the database pod:
 
 ```yaml
 schedule: "*/15 * * * *"
@@ -215,7 +220,7 @@ schedule: "*/15 * * * *"
 Apply it:
 
 ```bash
-kubectl apply -f cronjob.yaml
+kubectl apply -f backup/cronjob.yaml
 ```
 
 Check job history:
