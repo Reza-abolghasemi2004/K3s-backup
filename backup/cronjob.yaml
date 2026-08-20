@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: CronJob
+
+metadata:
+  name: postgres-backup
+  namespace: postgres
+
+spec:
+  schedule: "* * * * *"
+
+  concurrencyPolicy: Forbid
+
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      template:
+
+        spec:
+          restartPolicy: OnFailure
+
+          containers:
+            - name: postgres-backup
+
+              image: postgres:17
+
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: POSTGRES_PASSWORD
+
+              command:
+                - /bin/bash
+                - -c
+
+              args:
+                - |
+                  set -e
+
+                  BACKUP_DIR="/backup"
+
+                  DATABASE="shop"
+
+                  USER="postgres"
+
+                  HOST="postgres"
+
+                  DATE=$(date +"%Y-%m-%d_%H-%M-%S")
+
+                  BACKUP_FILE="$BACKUP_DIR/shop_$DATE.sql"
+
+                  LOG_FILE="$BACKUP_DIR/backup.log"
+
+                  echo "[$(date)] Starting PostgreSQL backup..." >> "$LOG_FILE"
+
+                  pg_dump \
+                    -h "$HOST" \
+                    -U "$USER" \
+                    --clean \
+                    --if-exists \
+                    "$DATABASE" > "$BACKUP_FILE"
+
+                  echo "[$(date)] Backup created: $BACKUP_FILE" >> "$LOG_FILE"
+
+                  find "$BACKUP_DIR" \
+                    -type f \
+                    -name "*.sql" \
+                    -mtime +2 \
+                    -delete
+
+                  echo "[$(date)] Old backups removed." >> "$LOG_FILE"
+
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+
+          volumes:
+            - name: backup-storage
+
+              persistentVolumeClaim:
+                claimName: postgres-backup-pvc
